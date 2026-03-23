@@ -53,3 +53,8 @@ dkms.conf
 
 # debug information files
 *.dwo
+
+# VaultXGPU build artifacts
+vaultx_cuda
+vaultx_sycl
+build/
