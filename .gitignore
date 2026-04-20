@@ -57,4 +57,3 @@ dkms.conf
 # VaultXGPU build artifacts
 vaultx_cuda
 vaultx_sycl
-build/
