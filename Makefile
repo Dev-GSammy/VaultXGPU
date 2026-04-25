@@ -23,8 +23,7 @@ NVCC       ?= nvcc
 CUDA_ARCH  ?= -gencode arch=compute_70,code=sm_70 \
               -gencode arch=compute_75,code=sm_75 \
               -gencode arch=compute_80,code=sm_80 \
-              -gencode arch=compute_86,code=sm_86 \
-              -gencode arch=compute_89,code=sm_89
+              -gencode arch=compute_86,code=sm_86
 CUDA_FLAGS  = $(COMMON_CFLAGS) -DGPU_CUDA=1 $(CUDA_ARCH) \
               --expt-relaxed-constexpr -rdc=true -Isrc
 
