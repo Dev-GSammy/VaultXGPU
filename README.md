@@ -22,11 +22,26 @@ The output is a standard VaultX plot file (`k{K}-{hex_plot_id}.plot`) that CPU V
 - NVIDIA GPU with compute capability >= 7.0 (Volta or newer)
 - Install: https://developer.nvidia.com/cuda-toolkit
 
+Terminal Commands: 
+wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+sudo dpkg -i cuda-keyring_1.1-1_all.deb
+sudo apt update
+sudo apt install -y cuda
+echo 'export PATH=/usr/local/cuda/bin:$PATH' >> ~/.bashrc
+source ~/.bashrc
+
 ### SYCL build (Intel/AMD/NVIDIA GPUs)
 - Intel oneAPI Base Toolkit (2023.0+) which includes `icpx` and the SYCL runtime
 - Install: https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit.html
 - For AMD GPUs: also install ROCm (https://rocm.docs.amd.com/) and the oneAPI AMD plugin
-- For NVIDIA GPUs: also install the oneAPI NVIDIA plugin
+- For NVIDIA GPUs: also install the oneAPI NVIDIA plugin\
+
+Install: 
+wget -O- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | gpg --dearmor | sudo tee /usr/share/keyrings/oneapi-archive-keyring.gpg > /dev/null
+echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" | sudo tee /etc/apt/sources.list.d/oneAPI.list
+sudo apt update
+sudo apt install -y intel-oneapi-dpcpp-cpp
+source /opt/intel/oneapi/setvars.sh
 
 ### ROCm for AMD GPUs
 1. Add the ROCm repo:
