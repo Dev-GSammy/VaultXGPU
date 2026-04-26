@@ -67,7 +67,7 @@ build/cuda:
 
 # SYCL build
 ICPX       ?= icpx
-SYCL_FLAGS  = $(COMMON_CFLAGS) -DGPU_SYCL=1 -fsycl -Isrc
+SYCL_FLAGS  = $(COMMON_CFLAGS) -DGPU_SYCL=1 -fsycl -fno-sycl-id-queries-fit-in-int -Isrc
 
 SYCL_SRCS   = src/sycl/gpu_context_sycl.cpp src/sycl/table1_sycl.cpp \
               src/sycl/sort_table2_sycl.cpp
