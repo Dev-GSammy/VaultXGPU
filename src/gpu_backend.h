@@ -23,8 +23,9 @@
 //   void   gpu_print_device_info(int device_id);
 //   int    gpu_init(GPUContext& ctx, int K, const uint32_t* key_words, int device_id);
 //   void   gpu_generate_table1(GPUContext& ctx);
+//   void   gpu_free_table1(GPUContext& ctx);   // free table1 VRAM after sort+match
 //   void   gpu_sort_and_match(GPUContext& ctx);
-//   void   gpu_get_table2(GPUContext& ctx);
+//   int    gpu_write_table2(GPUContext& ctx, int K, const uint8_t* plot_id, const char* output_dir);
 //   void   gpu_cleanup(GPUContext& ctx);
 
 #endif // VAULTXGPU_GPU_BACKEND_H

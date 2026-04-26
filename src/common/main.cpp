@@ -1,7 +1,6 @@
 #include "globals.h"
 #include "crypto_cpu.h"
 #include "memory.h"
-#include "plot_io.h"
 #include "../gpu_backend.h"
 
 #include <sodium.h>
@@ -147,15 +146,15 @@ int main(int argc, char** argv) {
     double t2_sec = std::chrono::duration<double>(t2_end - t2_start).count();
     printf("Sort+Table2 done: %.3f seconds\n", t2_sec);
 
-    // ── Phase 4: D2H transfer + write ──
+    // Table1 is no longer needed — free its device memory before the write phase
+    gpu_free_table1(ctx);
+
+    // ── Phase 4: Stream Table2 to disk (256 MB at a time, no full host copy) ──
 
     printf("\n--- Phase 4: Transfer + Write ---\n");
     auto w_start = std::chrono::high_resolution_clock::now();
 
-    gpu_get_table2(ctx);
-
-    uint64_t total_nonces = 1ULL << opts.K;
-    int rc = write_plot_file(ctx.h_table2, total_nonces, opts.K, plot_id, opts.file);
+    int rc = gpu_write_table2(ctx, opts.K, plot_id, opts.file);
 
     auto w_end = std::chrono::high_resolution_clock::now();
     double w_sec = std::chrono::duration<double>(w_end - w_start).count();
@@ -168,6 +167,7 @@ int main(int argc, char** argv) {
     double total_sec = std::chrono::duration<double>(total_end - total_start).count();
 
     // ── Summary ──
+    uint64_t total_nonces = 1ULL << opts.K;
     printf("\n=== Summary ===\n");
     printf("K=%d, Nonces=%llu\n", opts.K, (unsigned long long)total_nonces);
     printf("Table1:       %.3f s\n", t1_sec);

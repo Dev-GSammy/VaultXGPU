@@ -29,8 +29,6 @@ struct CudaGPUContext {
     MemoTable2Record* d_table2;          // N entries (worst-case output)
     uint32_t*         d_table2_counters; // TOTAL_BUCKETS entries
 
-    // Host pointer for D2H transfer
-    MemoTable2Record* h_table2;
 };
 
 
@@ -53,8 +51,11 @@ void gpu_generate_table1(CudaGPUContext& ctx);
 // Sort each bucket + find matches + generate Table2 on GPU
 void gpu_sort_and_match(CudaGPUContext& ctx);
 
-// Transfer Table2 from device to host
-void gpu_get_table2(CudaGPUContext& ctx);
+// Free Table1 device memory after sort+match (call before write phase)
+void gpu_free_table1(CudaGPUContext& ctx);
+
+// Stream Table2 from device to disk in chunks (no full host copy)
+int gpu_write_table2(CudaGPUContext& ctx, int K, const uint8_t* plot_id, const char* output_dir);
 
 // Free all GPU allocations
 void gpu_cleanup(CudaGPUContext& ctx);

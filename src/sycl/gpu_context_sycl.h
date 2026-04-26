@@ -32,8 +32,6 @@ struct SyclGPUContext {
     uint32_t*         d_table2_counters;
     uint32_t*         d_key_words;  // key on device
 
-    // Host pointer for D2H transfer
-    MemoTable2Record* h_table2;
 };
 
 // ──────────────────────────────────────────────
@@ -44,8 +42,9 @@ size_t gpu_query_device(int device_id);
 void   gpu_print_device_info(int device_id);
 int    gpu_init(SyclGPUContext& ctx, int K, const uint32_t* key_words, int device_id);
 void   gpu_generate_table1(SyclGPUContext& ctx);
+void   gpu_free_table1(SyclGPUContext& ctx);
 void   gpu_sort_and_match(SyclGPUContext& ctx);
-void   gpu_get_table2(SyclGPUContext& ctx);
+int    gpu_write_table2(SyclGPUContext& ctx, int K, const uint8_t* plot_id, const char* output_dir);
 void   gpu_cleanup(SyclGPUContext& ctx);
 
 #endif // VAULTXGPU_GPU_CONTEXT_SYCL_H
