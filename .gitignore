@@ -57,3 +57,8 @@ dkms.conf
 # VaultXGPU build artifacts
 vaultx_cuda
 vaultx_sycl
+./Paper
+Paper/
+*.PUB
+*.PUB.1
+GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB.1
