@@ -26,7 +26,7 @@ void gpu_generate_table1(SyclGPUContext& ctx) {
 
     size_t global_size = ((N + BLOCK_SIZE - 1) / BLOCK_SIZE) * BLOCK_SIZE;
 
-    ctx.q->submit([&](sycl::handler& cgh) {
+    sycl::event ev = ctx.q->submit([&](sycl::handler& cgh) {
         cgh.parallel_for(sycl::range<1>(global_size), [=](sycl::id<1> id) {
             uint64_t gid = id[0];
             if (gid >= N) return;
@@ -61,10 +61,21 @@ void gpu_generate_table1(SyclGPUContext& ctx) {
                 for (int b = 0; b < NONCE_SIZE; b++) {
                     d_table1[storage_idx].nonce[b] = nonce_bytes[b];
                 }
-            } else {
-                counter_ref.fetch_min(rpb);
             }
+            // Overflowing records are dropped and the counter is left unclamped,
+            // so its final value is the bucket's true occupancy -- which is what
+            // makes overflow loss and storage efficiency observable (--stats).
+            // Consumers clamp to rpb when reading. Matches the CUDA backend.
         });
     });
     ctx.q->wait();
+
+    // Kernel-only time from device profiling, when the queue was created with it.
+    try {
+        uint64_t t0 = ev.get_profiling_info<sycl::info::event_profiling::command_start>();
+        uint64_t t1 = ev.get_profiling_info<sycl::info::event_profiling::command_end>();
+        ctx.table1_kernel_seconds = static_cast<double>(t1 - t0) * 1e-9;
+    } catch (const sycl::exception&) {
+        ctx.table1_kernel_seconds = -1.0;
+    }
 }

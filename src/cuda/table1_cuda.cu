@@ -50,10 +50,12 @@ __global__ void generate_table1_kernel(
         for (int i = 0; i < NONCE_SIZE; i++) {
             bucket_storage[storage_idx].nonce[i] = nonce_bytes[i];
         }
-    } else {
-        // Cap overflow: doesn't need to be exact, just prevent unbounded growth
-        atomicMin(&bucket_counters[bucket_idx], records_per_bucket);
     }
+    // Overflowing records are dropped, and the counter is left unclamped so its
+    // final value is the bucket's true occupancy. That is what makes overflow
+    // loss and storage efficiency observable (--stats); consumers clamp to
+    // records_per_bucket when reading. Occupancy is Poisson with mean RPB, so the
+    // counter cannot approach 2^32 for any supported K.
 }
 // Launch wrapper
 
@@ -65,6 +67,11 @@ void gpu_generate_table1(CudaGPUContext& ctx) {
     printf("Generating Table1: %llu nonces, %u RPB, grid=%d blocks=%d\n",
            (unsigned long long)ctx.N, ctx.records_per_bucket, grid_size, BLOCK_SIZE);
 
+    cudaEvent_t ev_start, ev_stop;
+    cudaEventCreate(&ev_start);
+    cudaEventCreate(&ev_stop);
+    cudaEventRecord(ev_start);
+
     generate_table1_kernel<<<grid_size, BLOCK_SIZE>>>(
         ctx.d_table1,
         ctx.d_table1_counters,
@@ -72,8 +79,16 @@ void gpu_generate_table1(CudaGPUContext& ctx) {
         ctx.records_per_bucket
     );
 
+    cudaEventRecord(ev_stop);
     cudaError_t err = cudaDeviceSynchronize();
     if (err != cudaSuccess) {
         fprintf(stderr, "Table1 kernel error: %s\n", cudaGetErrorString(err));
+        ctx.table1_kernel_seconds = -1.0;
+    } else {
+        float ms = 0.0f;
+        cudaEventElapsedTime(&ms, ev_start, ev_stop);
+        ctx.table1_kernel_seconds = ms / 1000.0;
     }
+    cudaEventDestroy(ev_start);
+    cudaEventDestroy(ev_stop);
 }

@@ -1,7 +1,10 @@
 #include "gpu_context_cuda.h"
 #include "../common/plot_io.h"
+#include "../common/plot_writer.h"
+#include "../common/metrics.h"
 #include <cuda_runtime.h>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <algorithm>
 #include <fcntl.h>
@@ -75,6 +78,12 @@ int gpu_init(CudaGPUContext& ctx, int K, const uint32_t* key_words, int device_i
 
     CUDA_CHECK(cudaMemGetInfo(&ctx.free_mem, &ctx.total_mem));
 
+    int driver = 0, runtime = 0;
+    cudaDriverGetVersion(&driver);
+    cudaRuntimeGetVersion(&runtime);
+    snprintf(ctx.driver_version, sizeof(ctx.driver_version), "%d.%d/rt%d.%d",
+             driver / 1000, (driver % 1000) / 10, runtime / 1000, (runtime % 1000) / 10);
+
     // Copy key words to host context and device constant memory
     memcpy(ctx.key_words, key_words, 8 * sizeof(uint32_t));
     CUDA_CHECK(cudaMemcpyToSymbol(d_key_words, key_words, 8 * sizeof(uint32_t)));
@@ -100,65 +109,169 @@ void gpu_free_table1(CudaGPUContext& ctx) {
     if (ctx.d_table1_counters) { cudaFree(ctx.d_table1_counters); ctx.d_table1_counters = nullptr; }
 }
 
-// Stream d_table2 to disk in 256 MB chunks using a pinned host staging buffer.
-// This avoids allocating a full N*8-byte host copy — only 256 MB of host RAM is used
-// regardless of K.
+// ──────────────────────────────────────────────
+// Output stage
+//
+// Device-to-host transfer and disk write are separate operations with separate
+// timers. Two pinned staging buffers let the D2H copy of chunk i run while
+// PlotWriter's thread writes chunk i-1, so with cfg.overlap the stage costs
+// max(PCIe, disk) rather than PCIe + disk. D2H is timed with CUDA events, which
+// measures the copy itself and is unaffected by what the filesystem is doing.
+// ──────────────────────────────────────────────
 
-int gpu_write_table2(CudaGPUContext& ctx, int K, const uint8_t* plot_id, const char* output_dir) {
+int gpu_write_table2(CudaGPUContext& ctx, int K, const uint8_t* plot_id,
+                     const char* output_dir, const PlotWriterConfig& cfg,
+                     RunMetrics& m) {
     char filepath[512];
     build_plot_path(filepath, sizeof(filepath), output_dir, K, plot_id);
 
-    int fd = open(filepath, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd == -1) {
-        fprintf(stderr, "Error opening file %s: %s\n", filepath, strerror(errno));
-        return -1;
+    const size_t   record_bytes = sizeof(MemoTable2Record);
+    const uint64_t total_bytes  = ctx.N * record_bytes;
+
+    // Chunk size must hold whole records and, under O_DIRECT, be a multiple of
+    // the alignment. Round down, never to zero.
+    const size_t align = plot_writer_alignment();
+    size_t chunk_bytes = cfg.chunk_bytes;
+    if (chunk_bytes < align) chunk_bytes = align;
+    chunk_bytes = (chunk_bytes / align) * align;
+    if (static_cast<uint64_t>(chunk_bytes) > total_bytes)
+        chunk_bytes = static_cast<size_t>(total_bytes);
+    const size_t chunk_records = chunk_bytes / record_bytes;
+
+    // Allocation size is rounded up to the alignment: aligned_alloc requires the
+    // size to be a multiple of it, and chunk_bytes was clamped to total_bytes,
+    // which need not be.
+    const size_t staging_bytes = ((chunk_bytes + align - 1) / align) * align;
+
+    PlotWriterConfig wcfg = cfg;
+    wcfg.chunk_bytes = chunk_bytes;
+
+    PlotWriter writer;
+    if (writer.open(filepath, total_bytes, wcfg) != 0) return -1;
+    printf("Writing plot file: %s (chunk=%zu MB, o_direct=%s, overlap=%s)\n",
+           filepath, chunk_bytes / (1024 * 1024),
+           writer.o_direct_effective() ? "yes" : "no",
+           cfg.overlap ? "yes" : "no");
+
+    // Two pinned buffers so the caller can refill one while the other is written.
+    // cudaMallocHost is page-aligned, which is what O_DIRECT requires.
+    const int NBUF = cfg.overlap ? 2 : 1;
+    MemoTable2Record* staging[2] = {nullptr, nullptr};
+    bool pinned = true;
+    for (int i = 0; i < NBUF; i++) {
+        if (cudaMallocHost(&staging[i], staging_bytes) != cudaSuccess || !staging[i]) {
+            pinned = false;
+            break;
+        }
     }
-    printf("Writing plot file: %s\n", filepath);
-
-    constexpr size_t STAGING_BYTES = 256ULL * 1024 * 1024; // 256 MB staging buffer
-    size_t staging_records = STAGING_BYTES / sizeof(MemoTable2Record);
-
-    MemoTable2Record* staging = nullptr;
-    cudaError_t err = cudaMallocHost(&staging, staging_records * sizeof(MemoTable2Record));
-    if (err != cudaSuccess || !staging) {
-        // Fall back to regular malloc if pinned alloc fails
-        staging = new MemoTable2Record[staging_records];
+    if (!pinned) {
+        // Fall back to aligned host memory; slower D2H but still O_DIRECT-safe.
+        for (int i = 0; i < NBUF; i++) {
+            if (staging[i]) { cudaFreeHost(staging[i]); staging[i] = nullptr; }
+        }
+        for (int i = 0; i < NBUF; i++) {
+            staging[i] = static_cast<MemoTable2Record*>(aligned_alloc(align, staging_bytes));
+            if (!staging[i]) {
+                fprintf(stderr, "Error: could not allocate %zu B staging buffer\n", staging_bytes);
+                for (int j = 0; j < i; j++) free(staging[j]);
+                writer.finish();
+                return -1;
+            }
+        }
+        fprintf(stderr, "Warning: pinned staging allocation failed; using pageable memory.\n");
     }
 
-    size_t total_written_bytes = 0;
+    cudaStream_t stream;
+    cudaStreamCreate(&stream);
+    cudaEvent_t ev_a, ev_b;
+    cudaEventCreate(&ev_a);
+    cudaEventCreate(&ev_b);
+
+    const double wall_start = now_seconds();
     size_t done = 0;
-    int rc = 0;
+    int    rc   = 0;
+    int    buf  = 0;
 
     while (done < ctx.N) {
-        size_t batch = std::min(staging_records, ctx.N - done);
-        cudaMemcpy(staging, ctx.d_table2 + done, batch * sizeof(MemoTable2Record),
-                   cudaMemcpyDeviceToHost);
+        size_t batch = std::min(chunk_records, ctx.N - done);
+        size_t bytes = batch * record_bytes;
 
-        const char* ptr = reinterpret_cast<const char*>(staging);
-        size_t to_write = batch * sizeof(MemoTable2Record);
-        size_t written = 0;
-        while (written < to_write) {
-            ssize_t n = write(fd, ptr + written, to_write - written);
-            if (n < 0) {
-                fprintf(stderr, "Error writing at offset %zu: %s\n",
-                        total_written_bytes + written, strerror(errno));
-                rc = -1;
-                goto done_write;
-            }
-            written += static_cast<size_t>(n);
+        cudaEventRecord(ev_a, stream);
+        cudaError_t cerr = cudaMemcpyAsync(staging[buf], ctx.d_table2 + done, bytes,
+                                           cudaMemcpyDeviceToHost, stream);
+        cudaEventRecord(ev_b, stream);
+        if (cerr == cudaSuccess) cerr = cudaStreamSynchronize(stream);
+        if (cerr != cudaSuccess) {
+            fprintf(stderr, "Error copying Table2 chunk at record %zu: %s\n",
+                    done, cudaGetErrorString(cerr));
+            rc = -1;
+            break;
         }
-        total_written_bytes += written;
+
+        float ms = 0.0f;
+        cudaEventElapsedTime(&ms, ev_a, ev_b);
+        m.d2h += ms / 1000.0;
+
+        // Returns once the previously submitted buffer has drained, so the other
+        // buffer is free for the next copy.
+        if (writer.submit(staging[buf], bytes) != 0) { rc = -1; break; }
+
         done += batch;
+        buf = (buf + 1) % NBUF;
     }
 
-done_write:
-    // staging may be pinned or regular — try cudaFreeHost first
-    if (cudaFreeHost(staging) != cudaSuccess)
-        delete[] staging;
-    close(fd);
+    if (writer.finish() != 0) rc = -1;
+
+    m.write      += writer.write_seconds();
+    m.fsync      += writer.fsync_seconds();
+    m.bytes_written = writer.bytes_written();
+    m.write_wall += now_seconds() - wall_start;
+
+    cudaEventDestroy(ev_a);
+    cudaEventDestroy(ev_b);
+    cudaStreamDestroy(stream);
+    for (int i = 0; i < NBUF; i++) {
+        if (!staging[i]) continue;
+        if (pinned) cudaFreeHost(staging[i]);
+        else        free(staging[i]);
+    }
+
     if (rc == 0)
-        printf("Plot file written: %zu bytes\n", total_written_bytes);
+        printf("Plot file written: %llu bytes\n", (unsigned long long)m.bytes_written);
     return rc;
+}
+
+// Counter readback for --stats
+
+
+void gpu_read_stats(CudaGPUContext& ctx, RunMetrics& m) {
+    const size_t bytes = TOTAL_BUCKETS * sizeof(uint32_t);
+
+    uint32_t* h_t1 = nullptr;
+    uint32_t* h_t2 = static_cast<uint32_t*>(malloc(bytes));
+    if (ctx.d_table1_counters) h_t1 = static_cast<uint32_t*>(malloc(bytes));
+
+    if (!h_t2 || (ctx.d_table1_counters && !h_t1)) {
+        fprintf(stderr, "Warning: could not allocate %zu B for counter readback; "
+                        "skipping --stats.\n", bytes);
+        free(h_t1); free(h_t2);
+        return;
+    }
+
+    bool ok = true;
+    if (h_t1 && cudaMemcpy(h_t1, ctx.d_table1_counters, bytes,
+                           cudaMemcpyDeviceToHost) != cudaSuccess) ok = false;
+    if (cudaMemcpy(h_t2, ctx.d_table2_counters, bytes,
+                   cudaMemcpyDeviceToHost) != cudaSuccess) ok = false;
+
+    if (ok) {
+        compute_bucket_stats(h_t1, h_t2, ctx.records_per_bucket, ctx.N, m);
+    } else {
+        fprintf(stderr, "Warning: counter readback failed; skipping --stats.\n");
+    }
+
+    free(h_t1);
+    free(h_t2);
 }
 
 // Cleanup

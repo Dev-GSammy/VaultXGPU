@@ -2,6 +2,8 @@
 #define VAULTXGPU_GPU_CONTEXT_CUDA_H
 
 #include "../common/globals.h"
+#include "../common/metrics.h"
+#include "../common/plot_writer.h"
 #include <cstdint>
 #include <cstddef>
 
@@ -29,6 +31,12 @@ struct CudaGPUContext {
     MemoTable2Record* d_table2;          // N entries (worst-case output)
     uint32_t*         d_table2_counters; // TOTAL_BUCKETS entries
 
+    // Kernel-only time from CUDA events, seconds. -1 when unavailable.
+    double table1_kernel_seconds = -1.0;
+    double sort_kernel_seconds   = -1.0;
+
+    // Driver version string for the CSV row.
+    char driver_version[64] = {0};
 };
 
 
@@ -54,8 +62,17 @@ void gpu_sort_and_match(CudaGPUContext& ctx);
 // Free Table1 device memory after sort+match (call before write phase)
 void gpu_free_table1(CudaGPUContext& ctx);
 
-// Stream Table2 from device to disk in chunks (no full host copy)
-int gpu_write_table2(CudaGPUContext& ctx, int K, const uint8_t* plot_id, const char* output_dir);
+// Stream Table2 from device to disk in chunks (no full host copy).
+// Fills m.d2h, m.write, m.fsync, m.write_wall and m.bytes_written.
+int gpu_write_table2(CudaGPUContext& ctx, int K, const uint8_t* plot_id,
+                     const char* output_dir, const PlotWriterConfig& cfg,
+                     RunMetrics& m);
+
+// Read the Table1/Table2 bucket counters back to the host and fill in the
+// occupancy, overflow and storage-efficiency fields of m. Must be called before
+// gpu_free_table1(). Costs two TOTAL_BUCKETS*4 B transfers, so it is gated on
+// --stats and runs outside the timed stages.
+void gpu_read_stats(CudaGPUContext& ctx, RunMetrics& m);
 
 // Free all GPU allocations
 void gpu_cleanup(CudaGPUContext& ctx);

@@ -10,15 +10,8 @@
 void build_plot_path(char* dest, size_t dest_size,
                      const char* dir, int K, const uint8_t* plot_id);
 
-// Write table2 data to a plot file.
-// Data is written sequentially in 4MB chunks.
-// Returns 0 on success, -1 on error.
-int write_plot_file(
-    const MemoTable2Record* table2_data,
-    size_t total_nonces,
-    int K,
-    const uint8_t* plot_id,
-    const char* output_dir
-);
+// Table2 is written by PlotWriter (common/plot_writer.h), driven from each
+// backend so the device-to-host copy and the disk write are timed separately.
+// There is deliberately no second write path here.
 
 #endif // VAULTXGPU_PLOT_IO_H

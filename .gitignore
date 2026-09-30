@@ -57,6 +57,10 @@ dkms.conf
 # VaultXGPU build artifacts
 vaultx_cuda
 vaultx_sycl
+vaultx_validate
+vaultx_cuda_sort*
+vaultx_sycl_sort*
+build/
 ./Paper
 Paper/
 *.PUB

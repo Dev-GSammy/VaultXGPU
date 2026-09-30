@@ -2,6 +2,8 @@
 #define VAULTXGPU_GPU_CONTEXT_SYCL_H
 
 #include "../common/globals.h"
+#include "../common/metrics.h"
+#include "../common/plot_writer.h"
 #include <cstdint>
 #include <cstddef>
 #include <sycl/sycl.hpp>
@@ -32,6 +34,16 @@ struct SyclGPUContext {
     uint32_t*         d_table2_counters;
     uint32_t*         d_key_words;  // key on device
 
+    // True when the selected device is a real GPU. False means the SYCL runtime
+    // fell back to a CPU device, which must never be reported as a GPU result.
+    bool is_gpu = false;
+
+    // Kernel-only time from SYCL event profiling, seconds. -1 when unavailable.
+    double table1_kernel_seconds = -1.0;
+    double sort_kernel_seconds   = -1.0;
+
+    // Backend/driver version string for the CSV row.
+    char driver_version[64] = {0};
 };
 
 // ──────────────────────────────────────────────
@@ -44,7 +56,14 @@ int    gpu_init(SyclGPUContext& ctx, int K, const uint32_t* key_words, int devic
 void   gpu_generate_table1(SyclGPUContext& ctx);
 void   gpu_free_table1(SyclGPUContext& ctx);
 void   gpu_sort_and_match(SyclGPUContext& ctx);
-int    gpu_write_table2(SyclGPUContext& ctx, int K, const uint8_t* plot_id, const char* output_dir);
+int    gpu_write_table2(SyclGPUContext& ctx, int K, const uint8_t* plot_id,
+                        const char* output_dir, const PlotWriterConfig& cfg,
+                        RunMetrics& m);
+
+// Read the bucket counters back and fill in m's occupancy/overflow/SE fields.
+// Must be called before gpu_free_table1(); gated on --stats.
+void   gpu_read_stats(SyclGPUContext& ctx, RunMetrics& m);
+
 void   gpu_cleanup(SyclGPUContext& ctx);
 
 #endif // VAULTXGPU_GPU_CONTEXT_SYCL_H
