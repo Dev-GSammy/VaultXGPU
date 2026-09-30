@@ -292,6 +292,22 @@ overlap settings and the plot ID, so rows from different machines and configurat
 be pooled without losing track of what produced them. `--csv-header` prints the full
 field list.
 
+## Running experiments
+
+`scripts/` holds the measurement harness and `experiments/` the results, one directory
+per machine. Four scripts cover the whole campaign:
+
+```bash
+./scripts/run_validate.sh   -h   # correctness: validate plots, search with the CPU prover
+./scripts/run_bench.sh      -h   # the main sweep: K, backend, sort, drive, chunk, overlap, power
+./scripts/run_cpu_baseline.sh -h # CPU VaultX on the same host, swept over thread count
+./scripts/run_multigpu.sh   -h   # concurrent GPUs, and the VRAM ceiling
+```
+
+Each takes `-dry-run` to show what it would do and `-o` to choose the output file or
+directory. `scripts/README.md` maps each experiment to its command;
+`Paper/EXPERIMENTS.md` says what each experiment is for.
+
 ## GPU memory requirements
 
 The entire Table1 + Table2 must fit in GPU VRAM. If it doesn't fit, the program prints
