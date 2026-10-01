@@ -14,8 +14,12 @@
 #include <cstdint>
 #include <cstring>
 
-// Device/host annotation macros
-#ifdef GPU_CUDA
+// Device/host annotation macros.
+// Guarded on __CUDACC__, not GPU_CUDA: whether __device__ is a valid token is a
+// property of the compiler, not of which backend was selected. A CUDA build also
+// compiles some host-only translation units with the plain host compiler, and
+// those include this header too.
+#ifdef __CUDACC__
   #define BLAKE3_DEV __device__ __host__
 #else
   #define BLAKE3_DEV

@@ -20,7 +20,8 @@ CXX ?= g++
 # Sources
 COMMON_SRCS = src/common/main.cpp src/common/crypto_cpu.cpp \
               src/common/memory.cpp src/common/plot_io.cpp \
-              src/common/metrics.cpp src/common/plot_writer.cpp
+              src/common/metrics.cpp src/common/plot_writer.cpp \
+              src/common/plot_check.cpp
 
 # Host-only translation units: no device code, so they are compiled by the host
 # compiler in both builds. plot_writer.cpp uses <thread>, which is cleaner to keep
@@ -57,6 +58,7 @@ cuda: vaultx_cuda$(SORT_SUFFIX)
 # Objects containing device code -- these take part in the device link step
 CUDA_DEV_OBJS = $(BUILD_DIR)/cuda/main.o $(BUILD_DIR)/cuda/crypto_cpu.o \
                 $(BUILD_DIR)/cuda/memory.o $(BUILD_DIR)/cuda/plot_io.o \
+                $(BUILD_DIR)/cuda/plot_check.o \
                 $(BUILD_DIR)/cuda/gpu_context_cuda.o \
                 $(BUILD_DIR)/cuda/table1_cuda.o $(BUILD_DIR)/cuda/sort_table2_cuda.o
 
@@ -79,6 +81,9 @@ $(BUILD_DIR)/cuda/memory.o: src/common/memory.cpp | $(BUILD_DIR)/cuda
 	$(NVCC) $(CUDA_FLAGS) -dc -x cu $< -o $@
 
 $(BUILD_DIR)/cuda/plot_io.o: src/common/plot_io.cpp | $(BUILD_DIR)/cuda
+	$(NVCC) $(CUDA_FLAGS) -dc -x cu $< -o $@
+
+$(BUILD_DIR)/cuda/plot_check.o: src/common/plot_check.cpp | $(BUILD_DIR)/cuda
 	$(NVCC) $(CUDA_FLAGS) -dc -x cu $< -o $@
 
 $(BUILD_DIR)/cuda/metrics.o: src/common/metrics.cpp | $(BUILD_DIR)/cuda
@@ -112,7 +117,8 @@ vaultx_sycl$(SORT_SUFFIX): $(COMMON_SRCS) $(SYCL_SRCS)
 	$(ICPX) $(SYCL_FLAGS) $(COMMON_SRCS) $(SYCL_SRCS) -o $@ $(LIBS)
 
 # Validator (host only, no GPU toolchain required)
-VALIDATE_SRCS = src/tools/validate_plot.cpp src/common/crypto_cpu.cpp
+VALIDATE_SRCS = src/tools/validate_plot.cpp src/common/plot_check.cpp \
+                src/common/crypto_cpu.cpp
 
 validate: vaultx_validate
 

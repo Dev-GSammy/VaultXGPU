@@ -32,7 +32,7 @@
 #   -keep           keep generated plots (implied by -plots)
 #   -nodrop         do not drop page cache before lookups
 #   -dry-run        print what would run, change nothing
-#   -v              print each command
+#   -verbose        print each command (note: the plotter's -v means verify)
 #   -h              this help
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -59,7 +59,7 @@ while [[ $# -gt 0 ]]; do
         -keep)       KEEP=true; shift ;;
         -nodrop)     DROP_CACHES=false; shift ;;
         -dry-run)    DRY_RUN=true; shift ;;
-        -v)          VERBOSE=true; shift ;;
+        -verbose)    VERBOSE=true; shift ;;
         -h|--help)   usage ;;
         *) die "unknown option '$1' (try -h)" ;;
     esac

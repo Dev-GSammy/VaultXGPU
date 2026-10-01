@@ -1,12 +1,21 @@
 # Experiment scripts
 
 Four runnable scripts plus a join helper. Every script takes `-h` for its full flag
-list, `-dry-run` to see what it would do, and `-o` to choose where results go.
+list, `-dry-run` to see what it would do, `-verbose` to echo each command as it runs,
+and `-o` to choose where results go.
+
+The scripts use `-verbose`, not `-v`: in the plotter itself `-v` means *verify*.
 
 | Script | Produces | What it does |
 |---|---|---|
 | `run_bench.sh` | E1.3, E2.1, E2.3, E2.4, E3.2, E4.1–E4.4, E5.1–E5.3, E7.1, E7.3 | The main sweep: K × backend × sort × drive × chunk × O_DIRECT × overlap × power cap |
 | `run_validate.sh` | E1.1 | Generates (or finds) plots, validates them structurally, optionally searches them with the CPU prover |
+
+The same structural check is built into the plotter as `-v` (validate what was just
+generated) and `-V <path>` (validate an existing plot or directory). `run_validate.sh`
+calls the standalone `vaultx_validate` so that one script covers both generated and
+pre-existing plots, including on hosts with no GPU toolchain.
+
 | `run_cpu_baseline.sh` | E2.2 | CPU VaultX on the same host, swept over thread count |
 | `run_multigpu.sh` | E6.1, E6.3 | N concurrent plotters across GPUs; `-vram` for the VRAM ceiling |
 | `join_runs.sh` | — | Merges a `bench_*.csv` with its `.runs.csv` sidecar |
@@ -20,6 +29,7 @@ experiments/<hostname>/
     machine_info.txt          CPU, GPUs, driver, memory, mounts -- written by every script
     bench_<tag>.csv           the plotter's own CSV schema, one row per run
     bench_<tag>.runs.csv      sidecar: tag, drive, repeat, power (join on `run`)
+    bench_<tag>.logs/         each run's full output, named by run id
     validate_<tag>.csv        one row per plot checked
     validate_<tag>.logs/      raw validator and prover output
     cpu_<tag>.csv             CPU baseline

@@ -8,6 +8,7 @@
 #
 # Results: experiments/<host>/bench_<tag>.csv  (the plotter's own schema)
 #          experiments/<host>/bench_<tag>.runs.csv  (tag, drive, power; join on `run`)
+#          experiments/<host>/bench_<tag>.logs/     (each run's full output)
 #
 # Usage:
 #   ./run_bench.sh -k 27-31 -drives /mnt/nvme                       # E2.1, E2.4
@@ -39,7 +40,7 @@
 #   -keep           keep generated plots instead of deleting  (default: delete)
 #   -nodrop         do not drop page cache between runs
 #   -dry-run        print what would run, change nothing
-#   -v              print each command
+#   -verbose        print each command (note: the plotter's -v means verify)
 #   -h              this help
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -69,7 +70,7 @@ while [[ $# -gt 0 ]]; do
         -keep)     KEEP=true; shift ;;
         -nodrop)   DROP_CACHES=false; shift ;;
         -dry-run)  DRY_RUN=true; shift ;;
-        -v)        VERBOSE=true; shift ;;
+        -verbose)  VERBOSE=true; shift ;;
         -h|--help) usage ;;
         *) die "unknown option '$1' (try -h)" ;;
     esac
@@ -87,6 +88,8 @@ mapfile -t CAP_L     < <(split_list  "$POWERCAPS")
 
 OUT="$(resolve_output "$OUT" "bench_${TAG}.csv")"
 SIDECAR="$(sidecar_path "$OUT")"
+LOGDIR="${OUT%.csv}.logs"
+mkdir -p "$LOGDIR"
 init_sidecar "$OUT"
 record_machine_info
 
@@ -135,16 +138,18 @@ for ((repeat = 1; repeat <= RUNS; repeat++)); do
 
     log "[$done_n/$total] $backend sort=$sort_mode K=$k dev=$device drive=$dlabel chunk=${chunk}MB odirect=$odirect overlap=$overlap cap=$cap run=$repeat/$RUNS"
 
+    logf="${LOGDIR}/run${run_id}_${backend}_s${sort_mode}_k${k}_${dlabel}.txt"
+
     drop_caches
     power_start "$device"
     t0="$(date +%s.%N)"
     rc=0
-    run_cmd "$benv" "$bin" "${args[@]}" > /dev/null 2>&1 || rc=$?
+    run_logged "$logf" "$benv" "$bin" "${args[@]}" || rc=$?
     t1="$(date +%s.%N)"
     wall="$(awk -v a="$t0" -v b="$t1" 'BEGIN { printf "%.3f", b - a }')"
     read -r avg_w max_w energy_j <<< "$(power_stop "$wall")"
 
-    (( rc != 0 )) && { warn "run failed (exit $rc); rerun without >/dev/null to see why"; failed=$((failed + 1)); }
+    (( rc != 0 )) && { warn "run failed (exit $rc); see $logf"; failed=$((failed + 1)); }
 
     $DRY_RUN || printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
         "$run_id" "$repeat" "$TAG" "$backend" "$device" "$k" "$drive" "$dlabel" \
@@ -160,3 +165,4 @@ done; done; done; done; done; done; done; done
 log "done: $done_n runs, $failed failed"
 log "  results: $OUT"
 log "  run log: $SIDECAR"
+log "  per-run output: $LOGDIR"

@@ -4,6 +4,7 @@
 #include "metrics.h"
 #include "plot_writer.h"
 #include "plot_io.h"
+#include "plot_check.h"
 #include "../gpu_backend.h"
 
 #include <sodium.h>
@@ -11,6 +12,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cerrno>
+#include <dirent.h>
+#include <sys/stat.h>
 
 #if defined(GPU_CUDA)
 static const char* kBackendName = "cuda";
@@ -34,7 +38,8 @@ enum {
     OPT_NO_OVERLAP,
     OPT_NO_FSYNC,
     OPT_REQUIRE_GPU,
-    OPT_RUN
+    OPT_RUN,
+    OPT_VERIFY_SAMPLE
 };
 
 struct Options {
@@ -44,7 +49,9 @@ struct Options {
     char tmpdir2[512] = {0};   // -j: accepted for compat, unused
     int  device     = 0;       // -d: GPU device index
     bool benchmark  = false;   // -b: benchmark mode
-    bool verify     = false;   // -v: verify after generation
+    bool verify     = false;   // -v: validate the plot after generating it
+    char verify_only[512] = {0}; // -V: validate an existing plot and exit
+    uint64_t verify_sample = 5000; // --verify-sample: buckets to check (0 = all)
 
     bool stats       = false;  // --stats: bucket counter readback
     char csv[512]    = {0};    // --csv PATH: append a CSV row
@@ -67,7 +74,10 @@ static void print_usage(const char* prog) {
     printf("  -j, --tmpdir2 PATH    Temp dir 2 (accepted for CLI compat, unused)\n");
     printf("  -d, --device NUM      GPU device index (default: 0)\n");
     printf("  -b, --benchmark       Benchmark mode (machine-readable summary line)\n");
-    printf("  -v, --verify          Print how to verify the plot after generation\n");
+    printf("  -v, --verify          Validate the plot after generating it\n");
+    printf("  -V, --verify-only PATH  Validate an existing plot (or every plot in a\n");
+    printf("                        directory) and exit without generating anything\n");
+    printf("      --verify-sample N Buckets to check for -v/-V; 0 checks all (default: 5000)\n");
     printf("  -h, --help            Show this help\n");
     printf("\nMeasurement:\n");
     printf("      --stats           Read bucket counters back and report occupancy,\n");
@@ -95,6 +105,8 @@ static int parse_args(int argc, char** argv, Options& opts) {
         {"device",      required_argument, 0, 'd'},
         {"benchmark",   no_argument,       0, 'b'},
         {"verify",      no_argument,       0, 'v'},
+        {"verify-only", required_argument, 0, 'V'},
+        {"verify-sample", required_argument, 0, OPT_VERIFY_SAMPLE},
         {"help",        no_argument,       0, 'h'},
         {"stats",       no_argument,       0, OPT_STATS},
         {"csv",         required_argument, 0, OPT_CSV},
@@ -109,7 +121,7 @@ static int parse_args(int argc, char** argv, Options& opts) {
     };
 
     int opt;
-    while ((opt = getopt_long(argc, argv, "k:f:g:j:d:bvh", long_options, nullptr)) != -1) {
+    while ((opt = getopt_long(argc, argv, "k:f:g:j:d:bvV:h", long_options, nullptr)) != -1) {
         switch (opt) {
             case 'k': opts.K = atoi(optarg); break;
             case 'f': strncpy(opts.file, optarg, sizeof(opts.file) - 1); break;
@@ -118,6 +130,8 @@ static int parse_args(int argc, char** argv, Options& opts) {
             case 'd': opts.device = atoi(optarg); break;
             case 'b': opts.benchmark = true; break;
             case 'v': opts.verify = true; break;
+            case 'V': strncpy(opts.verify_only, optarg, sizeof(opts.verify_only) - 1); break;
+            case OPT_VERIFY_SAMPLE: opts.verify_sample = strtoull(optarg, nullptr, 10); break;
             case 'h': print_usage(argv[0]); return -1;
 
             case OPT_STATS:       opts.stats = true; break;
@@ -134,7 +148,8 @@ static int parse_args(int argc, char** argv, Options& opts) {
         }
     }
 
-    if (opts.csv_header) return 0;   // nothing else is required
+    if (opts.csv_header) return 0;          // nothing else is required
+    if (opts.verify_only[0] != '\0') return 0;  // -V needs neither -k nor -f
 
     // K outside [MIN_K, MAX_K] has no valid matching factor, so a run would use a
     // placeholder value and silently produce a vault with the wrong match density.
@@ -161,6 +176,31 @@ static int parse_args(int argc, char** argv, Options& opts) {
 }
 
 
+// Validate one plot and report. Returns the plot_check exit code.
+static int validate_one(const char* path, uint64_t sample) {
+    int K = 0;
+    uint8_t plot_id[32];
+    if (!plot_check_parse_name(path, K, plot_id)) {
+        fprintf(stderr, "Error: cannot read K and plot ID from '%s'; expected "
+                        "k<K>-<64 hex>.plot\n", path);
+        return 2;
+    }
+    if (K < MIN_K || K > MAX_K) {
+        fprintf(stderr, "Error: K=%d from '%s' is outside the supported range %d-%d\n",
+                K, path, MIN_K, MAX_K);
+        return 2;
+    }
+
+    PlotCheckConfig cfg;
+    cfg.sample = sample;
+
+    printf("\nValidating %s\n", path);
+    PlotCheckResult r;
+    int rc = plot_check_run(path, K, plot_id, cfg, r, stdout);
+    if (rc != 2) plot_check_print_summary(stdout, r);
+    return rc;
+}
+
 // Main
 
 
@@ -173,6 +213,50 @@ int main(int argc, char** argv) {
     if (opts.csv_header) {
         print_csv_header(stdout);
         return 0;
+    }
+
+    // -V: validate existing plots and exit. No GPU is touched, so this works on
+    // a host whose device is busy or absent.
+    if (opts.verify_only[0] != '\0') {
+        if (sodium_init() < 0) {
+            fprintf(stderr, "Error: libsodium initialization failed\n");
+            return 1;
+        }
+        struct stat st;
+        if (stat(opts.verify_only, &st) != 0) {
+            fprintf(stderr, "Error: cannot access '%s': %s\n",
+                    opts.verify_only, strerror(errno));
+            return 2;
+        }
+        if (S_ISDIR(st.st_mode)) {
+            DIR* dir = opendir(opts.verify_only);
+            if (!dir) {
+                fprintf(stderr, "Error: cannot open directory '%s': %s\n",
+                        opts.verify_only, strerror(errno));
+                return 2;
+            }
+            int worst = 0, seen = 0;
+            struct dirent* ent;
+            while ((ent = readdir(dir)) != nullptr) {
+                const char* name = ent->d_name;
+                size_t len = strlen(name);
+                if (name[0] != 'k' || len < 6 || strcmp(name + len - 5, ".plot") != 0)
+                    continue;
+                char full[1024];
+                snprintf(full, sizeof(full), "%s/%s", opts.verify_only, name);
+                int rc = validate_one(full, opts.verify_sample);
+                if (rc > worst) worst = rc;
+                seen++;
+            }
+            closedir(dir);
+            if (seen == 0) {
+                fprintf(stderr, "Error: no k<K>-<id>.plot files in '%s'\n", opts.verify_only);
+                return 2;
+            }
+            printf("\nValidated %d plot(s): %s\n", seen, worst == 0 ? "all PASS" : "FAILURES PRESENT");
+            return worst;
+        }
+        return validate_one(opts.verify_only, opts.verify_sample);
     }
 
     // Initialize libsodium
@@ -363,11 +447,13 @@ int main(int argc, char** argv) {
         }
     }
 
-    if (opts.verify) {
+    // -v: validate what we just wrote. This runs after the timers have stopped
+    // and the CSV row is written, so it cannot affect any reported number.
+    if (opts.verify && rc == 0) {
         char path[512];
         build_plot_path(path, sizeof(path), opts.file, opts.K, plot_id);
-        printf("\nVerification:\n");
-        printf("  ./vaultx_validate %s\n", path);
+        int vrc = validate_one(path, opts.verify_sample);
+        if (vrc != 0) rc = vrc;
     }
 
     free(hex_id);

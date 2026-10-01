@@ -150,7 +150,8 @@ If you have more than one GPU, use `-d` to select by index:
 | `-f` | `--file` | Output directory for plot file. Required. | -- |
 | `-d` | `--device` | GPU device index | 0 |
 | `-b` | `--benchmark` | Machine-readable timing summary line | false |
-| `-v` | `--verify` | Print the command to validate the plot afterwards | false |
+| `-v` | `--verify` | Validate the plot after generating it | false |
+| `-V` | `--verify-only` | Validate an existing plot, or every plot in a directory, and exit | -- |
 | `-g` | `--tmpdir` | Accepted for CLI compat, unused | -- |
 | `-j` | `--tmpdir2` | Accepted for CLI compat, unused | -- |
 
@@ -163,6 +164,7 @@ If you have more than one GPU, use `-d` to select by index:
 | `--csv-header` | Print the CSV schema and exit | -- |
 | `--run N` | Repeat index recorded in the CSV row | 0 |
 | `--require-gpu` | Fail instead of running on a non-GPU device (SYCL) | false |
+| `--verify-sample N` | Buckets `-v`/`-V` check; 0 checks all | 5000 |
 
 **Output pipeline**
 
@@ -215,28 +217,44 @@ plot is written exactly once.
 
 ## Validating a plot
 
-`vaultx_validate` checks a finished plot against the format using nothing but the plot
-and its ID -- no GPU, no second plot, no reference implementation. For every stored
-pair it recomputes the hashes and asserts that:
+Validation needs nothing but the plot and its ID -- no GPU, no second plot, no
+reference implementation. For every stored pair it recomputes the hashes and asserts
+that:
 
 1. both nonces are below 2^K
 2. both nonces hash into the same Table1 bucket
 3. their 64-bit keys are ordered and within the matching distance for this K
 4. the pair hashes into the Table2 bucket it is physically stored in
 
+Checks 2 and 3 are what test the sort and match logic. A vault full of pairs that are
+not real matches would still fill every slot and still land every pair in a valid
+Table2 bucket, so it would pass a check that only looks at occupancy and ordering.
+
+The same code runs three ways, mirroring the CPU tool's `-v` / `-V` pair:
+
 ```bash
-# full check (every bucket)
-./vaultx_validate /data/plots/k27-<id>.plot
+# validate the plot you just generated
+./vaultx_cuda -k 27 -f /data/plots -v
 
-# sample 5000 random buckets -- much faster, same confidence per record
+# validate an existing plot, or every plot in a directory, without generating
+./vaultx_cuda -V /data/plots/k27-<id>.plot
+./vaultx_cuda -V /data/plots
+
+# standalone -- builds with no GPU toolchain, for hosts that cannot build the plotter
 ./vaultx_validate /data/plots/k27-<id>.plot --sample 5000 --seed 7
-
-# drill into specific buckets
 ./vaultx_validate /data/plots/k27-<id>.plot --bucket 0 --bucket 12345
 ```
 
-Exit status is 0 only if every checked record passes and the file is the expected size.
-It also reports storage efficiency, since empty slots are counted along the way.
+`-v` and `-V` sample 5000 buckets by default; `--verify-sample 0` checks every bucket.
+`-v` runs after the timers stop and the CSV row is written, so it cannot affect any
+reported number. Exit status is 0 only if every checked record passes and the file is
+the expected size. Storage efficiency is reported either way, since empty slots are
+counted along the way.
+
+This is a strictly stronger check than CPU VaultX's own verify pass, which confirms
+storage efficiency and that Table2 prefixes are non-decreasing but never checks that a
+pair's two nonces came from the same Table1 bucket or that their hash distance
+satisfies the match rule.
 
 Record **order within a bucket is not checked, and must not be**: slots are claimed
 with an atomic, so two runs on the same device produce the same records in a different
@@ -353,6 +371,7 @@ src/
     memory.cpp     GPU memory estimation
     plot_io.cpp    Plot path construction
     plot_writer.cpp  Output stage: O_DIRECT, chunking, overlapped writer thread
+    plot_check.cpp   Structural plot validation, shared by -v/-V and vaultx_validate
     metrics.h/.cpp   Timers, /proc/diskstats + mountstats probes, CSV schema, stats
     sort_net.h     Bitonic comparator and network shared by both backends
   blake3/
@@ -366,7 +385,7 @@ src/
     table1_sycl.cpp       Table1 generation kernel
     sort_table2_sycl.cpp  Per-bucket sort + match + Table2 kernel
   tools/
-    validate_plot.cpp     vaultx_validate: structural plot validation, host only
+    validate_plot.cpp     vaultx_validate: CLI front end for plot_check, host only
   gpu_backend.h    Compile-time backend selection (#ifdef GPU_CUDA / GPU_SYCL)
 ```
 

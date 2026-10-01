@@ -28,7 +28,7 @@
 #   -keep          keep generated plots
 #   -nodrop        do not drop page cache between runs
 #   -dry-run       print what would run, change nothing
-#   -v             print each command
+#   -verbose       print each command
 #   -h             this help
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -53,7 +53,7 @@ while [[ $# -gt 0 ]]; do
         -keep)       KEEP=true; shift ;;
         -nodrop)     DROP_CACHES=false; shift ;;
         -dry-run)    DRY_RUN=true; shift ;;
-        -v)          VERBOSE=true; shift ;;
+        -verbose)    VERBOSE=true; shift ;;
         -h|--help)   usage ;;
         *) die "unknown option '$1' (try -h)" ;;
     esac
@@ -97,8 +97,8 @@ for drive in "${DRIVE_L[@]}"; do
         drop_caches
         power_start 0
         t0="$(date +%s.%N)"; rc=0
-        run_cmd "" "$CPU_BIN" -k "$k" -f "$drive" -t "$threads" \
-                --threads_io "$IO_THREADS" > "$logf" 2>&1 || rc=$?
+        run_logged "$logf" "" "$CPU_BIN" -k "$k" -f "$drive" -t "$threads" \
+                   --threads_io "$IO_THREADS" || rc=$?
         t1="$(date +%s.%N)"
         wall="$(awk -v a="$t0" -v b="$t1" 'BEGIN { printf "%.3f", b - a }')"
         read -r avg_w _max_w energy_j <<< "$(power_stop "$wall")"

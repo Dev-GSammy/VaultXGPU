@@ -224,6 +224,27 @@ run_cmd() {
     fi
 }
 
+# run_logged <logfile> <env-assignments> <command...>
+# Sends the command's output to <logfile> so a failure is diagnosable afterwards.
+# Under -dry-run it prints the command and writes nothing. Prefer this over
+# redirecting at the call site: a call site that redirects stderr would also
+# swallow the -dry-run and -verbose lines.
+run_logged() {
+    local logf="$1"; shift
+    local envs="$1"; shift
+    if $DRY_RUN; then
+        printf '  DRY: %s %s\n' "$envs" "$*" >&2
+        return 0
+    fi
+    $VERBOSE && printf '  RUN: %s %s\n' "$envs" "$*" >&2
+    mkdir -p "$(dirname "$logf")"
+    if [[ -n "$envs" ]]; then
+        env $envs "$@" > "$logf" 2>&1
+    else
+        "$@" > "$logf" 2>&1
+    fi
+}
+
 # Record the machine's configuration once per experiments directory, so a CSV is
 # never orphaned from the hardware that produced it.
 record_machine_info() {

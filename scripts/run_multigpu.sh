@@ -30,7 +30,7 @@
 #   -keep          keep generated plots
 #   -nodrop        do not drop page cache between runs
 #   -dry-run       print what would run, change nothing
-#   -v             print each command
+#   -verbose       print each command (note: the plotter's -v means verify)
 #   -h             this help
 #
 # NONCE_SIZE defaults to 4 for the VRAM model; override with NONCE_SIZE=5.
@@ -56,7 +56,7 @@ while [[ $# -gt 0 ]]; do
         -keep)     KEEP=true; shift ;;
         -nodrop)   DROP_CACHES=false; shift ;;
         -dry-run)  DRY_RUN=true; shift ;;
-        -v)        VERBOSE=true; shift ;;
+        -verbose)  VERBOSE=true; shift ;;
         -h|--help) usage ;;
         *) die "unknown option '$1' (try -h)" ;;
     esac
@@ -103,7 +103,8 @@ if $VRAM_MODE; then
         t0="$(date +%s.%N)"; rc=0
         args=(-k "$k" -f "${DRIVE_L[0]}" -d 0)
         [[ -n "$BFLAGS" ]] && args+=($BFLAGS)
-        run_cmd "$BENV" "$BIN" "${args[@]}" > /dev/null 2>&1 || rc=$?
+        vlog="${OUT%.csv}.logs/vram_k${k}_r${repeat}.txt"
+        run_logged "$vlog" "$BENV" "$BIN" "${args[@]}" || rc=$?
         t1="$(date +%s.%N)"
         wall="$(awk -v a="$t0" -v b="$t1" 'BEGIN { printf "%.3f", b - a }')"
 
